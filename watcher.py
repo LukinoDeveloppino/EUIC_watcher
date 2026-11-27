@@ -281,10 +281,17 @@ def save_state(state: dict) -> None:
 
 
 def send_mail(subject: str, body: str, count: int = 1, delay: float = 0) -> None:
-    host = os.environ["SMTP_HOST"]
-    port = int(os.getenv("SMTP_PORT", "465"))
-    user = os.environ["SMTP_USER"]
-    pwd = os.environ["SMTP_PASS"]
+    # su GitHub un secret mancante arriva come stringa vuota, non come variabile assente
+    missing = [k for k in ("SMTP_HOST", "SMTP_USER", "SMTP_PASS", "MAIL_TO") if not os.getenv(k, "").strip()]
+    if missing:
+        raise SystemExit(
+            f"ERRORE: secret mancanti o vuoti: {', '.join(missing)} "
+            "(Settings > Secrets and variables > Actions > Secrets, nomi in maiuscolo)"
+        )
+    host = os.environ["SMTP_HOST"].strip()
+    port = int(os.getenv("SMTP_PORT", "").strip() or "465")
+    user = os.environ["SMTP_USER"].strip()
+    pwd = os.environ["SMTP_PASS"].replace(" ", "").strip()
     to = [x.strip() for x in os.environ["MAIL_TO"].split(",") if x.strip()]
     sender = os.getenv("MAIL_FROM") or user
 
@@ -295,7 +302,14 @@ def send_mail(subject: str, body: str, count: int = 1, delay: float = 0) -> None
         server = smtplib.SMTP(host, port, timeout=30)
         server.starttls(context=ctx)
     with server:
-        server.login(user, pwd)
+        try:
+            server.login(user, pwd)
+        except smtplib.SMTPAuthenticationError as e:
+            raise SystemExit(
+                f"ERRORE: login SMTP rifiutato per {user}: {e.smtp_code} {e.smtp_error!r}\n"
+                "Controlla SMTP_USER (indirizzo Gmail completo) e SMTP_PASS (App password di 16 lettere, "
+                "non la password normale dell'account)."
+            ) from None
         for i in range(count):
             msg = EmailMessage()
             msg["From"] = sender
