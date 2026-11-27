@@ -1,0 +1,56 @@
+name: EUIC watcher
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # ogni 15 minuti (GitHub può ritardare di qualche minuto)
+  workflow_dispatch:
+    inputs:
+      test_email:
+        description: "Manda solo una mail di prova"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # serve per committare state.json
+
+concurrency:
+  group: euic-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run watcher
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          SPAM_COUNT: ${{ vars.SPAM_COUNT || '10' }}
+          SPAM_DELAY_SEC: ${{ vars.SPAM_DELAY_SEC || '5' }}
+          REPEAT_WHEN_OPEN: ${{ vars.REPEAT_WHEN_OPEN || 'true' }}
+          REPEAT_COUNT: ${{ vars.REPEAT_COUNT || '1' }}
+          EVENT_YEAR: ${{ vars.EVENT_YEAR || '2027' }}
+          TEST_EMAIL: ${{ inputs.test_email && 'true' || 'false' }}
+        run: python watcher.py
+
+      - name: Commit state
+        if: ${{ !inputs.test_email }}
+        run: |
+          git config user.name  "euic-watcher-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || git commit -m "chore: update watcher state [skip ci]"
+          git push || (git pull --rebase && git push)
