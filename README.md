@@ -18,13 +18,11 @@ Fonti controllate: `rk9.gg/events/pokemon` (sezione upcoming), `rk9.gg/event/pok
 
    | Secret | Esempio |
    |---|---|
-   | `SMTP_HOST` | `smtp.gmail.com` |
-   | `SMTP_PORT` | `465` |
    | `SMTP_USER` | `tuoaccount@gmail.com` |
    | `SMTP_PASS` | la app password (16 caratteri) |
    | `MAIL_TO` | `tu@esempio.it` (anche più indirizzi separati da virgola) |
 
-4. (Opzionale) In *Variables*: `SPAM_COUNT` (default 10), `SPAM_DELAY_SEC` (5), `REPEAT_WHEN_OPEN` (true), `REPEAT_COUNT` (1), `EVENT_YEAR` (2027).
+4. (Opzionale) In *Variables*: `SMTP_HOST` (default `smtp.gmail.com`), `SMTP_PORT` (465), `SPAM_COUNT` (10), `SPAM_DELAY_SEC` (5), `REPEAT_WHEN_OPEN` (true), `REPEAT_COUNT` (1), `EVENT_YEAR` (2027). Servono solo se non usi Gmail o vuoi cambiare i default.
 5. *Actions → EUIC watcher → Run workflow* con **test_email** spuntato: deve arrivarti la mail di prova.
 6. Lancialo una volta senza test e guarda il log: deve mostrare `[ok] RK9 events`. Se vedi `[fail] … HTTP 403`, RK9 sta bloccando gli IP di GitHub (vedi sotto).
 
