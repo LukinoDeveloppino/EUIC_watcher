@@ -78,6 +78,7 @@ class Report:
     findings: list[Finding] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     ok_sources: int = 0
+    seen_tournaments: set[str] = field(default_factory=set)
 
     @property
     def level(self) -> int:
@@ -111,6 +112,51 @@ def opens_snippet(text: str) -> str | None:
     return m.group(0).strip() if m else None
 
 
+TCG_RE = re.compile(r"\bTCG\b|trading card game", re.I)
+
+
+def tournament_status(html: str) -> tuple[int, str]:
+    """Analizza una pagina torneo RK9 (/tournament/<id>) e ritorna (livello, dettaglio).
+
+    Pagina aperta:  "Registration closes <data>" + pulsante "Go to registration" (link /register/<id>)
+    Pagina chiusa:  "Registration closed <data>" + pulsante disabilitato
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    text = page_text(html)
+    if re.search(r"registration\s+(is\s+)?closed\b", text, re.I):
+        return 0, ""
+    if (
+        soup.find("a", href=re.compile(r"/register/"))
+        or re.search(r"\bgo to registration\b|\bregister now\b", text, re.I)
+        or is_open_text(text)
+    ):
+        closes = re.search(r"registration\s+closes\s+[^.|]{3,60}?\d{4}", text, re.I)
+        detail = "Registrazione TCG APERTA"
+        if closes:
+            detail += f" ({closes.group(0).strip()})"
+        return 3, detail
+    sn = opens_snippet(text)
+    return (2, sn) if sn else (0, "")
+
+
+def check_tcg_tournaments(rep: Report, urls: list[str], source: str) -> None:
+    """Visita le pagine torneo RK9 indicate e tiene solo quelle TCG (titolo h3 "... Pokémon TCG ...")."""
+    for url in urls:
+        if url in rep.seen_tournaments:
+            continue
+        rep.seen_tournaments.add(url)
+        status, html = fetch(url)
+        if status != 200:
+            continue
+        soup = BeautifulSoup(html, "html.parser")
+        heading = " ".join(h.get_text(" ", strip=True) for h in soup.find_all(["h1", "h2", "h3"])[:3])
+        if not TCG_RE.search(heading):
+            continue  # torneo VGC / GO / UNITE
+        level, detail = tournament_status(html)
+        if level:
+            rep.findings.append(Finding(level, source, detail, url))
+
+
 # ----------------------------------------------------------------------------- checks
 
 def check_rk9_events(rep: Report) -> None:
@@ -121,8 +167,8 @@ def check_rk9_events(rep: Report) -> None:
     rep.ok_sources += 1
     text = page_text(html)
 
-    # Considera solo la sezione "upcoming": la parte "Past events" contiene l'EUIC vecchio.
-    past = re.search(r"\bpast\s+events\b", text, re.I)
+    # Considera solo la sezione "upcoming": la parte "Past Pokémon Events" contiene l'EUIC vecchio.
+    past = re.search(r"\bpast\s+(pok[eé]mon\s+)?events\b", text, re.I)
     upcoming = text[: past.start()] if past else text
     require_year = past is None  # se non trovo la separazione, pretendo l'anno vicino al nome
 
@@ -139,11 +185,25 @@ def check_rk9_events(rep: Report) -> None:
         else:
             rep.findings.append(Finding(1, "RK9 events", window.strip()[:300], RK9_EVENTS))
 
+    # Quando un torneo è registrabile, la riga dell'evento mostra i link "TCG" / "VG" / "GO"
+    # verso /tournament/<id>: li controlliamo direttamente (non dipende dallo slug dell'evento).
+    soup = BeautifulSoup(html, "html.parser")
+    links = []
+    for row in soup.find_all("tr"):
+        row_text = row.get_text(" ", strip=True)
+        if not (EUIC_RE.search(row_text) and YEAR in row_text):
+            continue
+        for a in row.find_all("a", href=True):
+            if "/tournament/" in a["href"] and TCG_RE.search(a.get_text(" ", strip=True)):
+                links.append(urljoin(RK9_EVENTS, a["href"]))
+    check_tcg_tournaments(rep, links, "RK9 TCG tournament")
+
 
 def check_rk9_event_page(rep: Report) -> None:
     """Pagina evento diretta (rk9.gg/event/pokemon-euic-2027) + pagina torneo TCG."""
     status, html = fetch(RK9_EVENT_PAGE)
-    if status == 404:
+    if status in (404, 500):
+        # RK9 risponde 500 (non 404) per gli eventi che non esistono ancora
         rep.ok_sources += 1
         return
     if status != 200:
@@ -161,37 +221,14 @@ def check_rk9_event_page(rep: Report) -> None:
     if snippet:
         rep.findings.append(Finding(2, "RK9 event page", snippet, RK9_EVENT_PAGE))
 
-    # trova il link "Registration details" nella sezione TCG
-    tcg_link = None
-    for a in soup.find_all("a", href=True):
-        label = a.get_text(" ", strip=True).lower()
-        if "registration" not in label:
-            continue
-        # risali fino a un contenitore che contenga l'intestazione della sezione
-        node, ctx = a, ""
-        for _ in range(6):
-            node = node.parent
-            if node is None:
-                break
-            ctx = node.get_text(" ", strip=True)
-            if re.search(r"\bTCG\b|trading card", ctx, re.I):
-                break
-        if re.search(r"\bTCG\b|trading card", ctx, re.I) and not re.search(r"\bVGC\b|UNITE|Pok[eé]mon GO", ctx[:80]):
-            tcg_link = urljoin(RK9_EVENT_PAGE, a["href"])
-            break
-
-    if not tcg_link:
-        return
-    st2, html2 = fetch(tcg_link)
-    if st2 != 200:
-        return
-    t2 = page_text(html2)
-    if is_open_text(t2) or re.search(r"\bregister now\b", t2, re.I):
-        rep.findings.append(Finding(3, "RK9 TCG tournament", "Registrazione TCG APERTA", tcg_link))
-    else:
-        sn = opens_snippet(t2)
-        if sn:
-            rep.findings.append(Finding(2, "RK9 TCG tournament", sn, tcg_link))
+    # link "Registration details" delle varie sezioni (TCG / VGC / GO / UNITE) → /tournament/<id>;
+    # check_tcg_tournaments tiene solo quello il cui titolo dice "TCG".
+    links = [
+        urljoin(RK9_EVENT_PAGE, a["href"])
+        for a in soup.find_all("a", href=True)
+        if "/tournament/" in a["href"]
+    ]
+    check_tcg_tournaments(rep, list(dict.fromkeys(links)), "RK9 TCG tournament")
 
 
 def check_pokemon_news(rep: Report) -> None:
