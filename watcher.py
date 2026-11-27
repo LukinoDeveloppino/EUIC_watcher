@@ -296,11 +296,20 @@ def send_mail(subject: str, body: str, count: int = 1, delay: float = 0) -> None
     sender = os.getenv("MAIL_FROM") or user
 
     ctx = ssl.create_default_context()
-    if port == 465:
-        server = smtplib.SMTP_SSL(host, port, context=ctx, timeout=30)
-    else:
-        server = smtplib.SMTP(host, port, timeout=30)
-        server.starttls(context=ctx)
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, context=ctx, timeout=30)
+        else:
+            server = smtplib.SMTP(host, port, timeout=30)
+            server.starttls(context=ctx)
+    except OSError as e:
+        # (host e porta sono secret: GitHub li mostrerebbe come ***)
+        kind = "465" if port == 465 else "587" if port == 587 else "DIVERSA da 465/587"
+        raise SystemExit(
+            f"ERRORE: connessione al server SMTP fallita ({e}). Porta usata: {kind}.\n"
+            "Per Gmail: SMTP_HOST = smtp.gmail.com e SMTP_PORT = 465 "
+            "(la porta 25 è bloccata sui runner GitHub)."
+        ) from None
     with server:
         try:
             server.login(user, pwd)
